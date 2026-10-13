@@ -11,6 +11,7 @@ package gosnmp
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -287,21 +288,29 @@ func (x *GoSNMP) ConnectIPv6() error {
 	return x.connect("6")
 }
 
-// Close closes the underlaying connection.
-//
-// This method is safe to call multiple times and from concurrent goroutines.
-// Only the first call will close the connection; subsequent calls are no-ops.
+// ConnectionOwnershipContractVersion identifies the retained-connection lifecycle
+// contract. This source marker does not establish immutable publication or health.
+const ConnectionOwnershipContractVersion = 1
+
+// Close closes the owned connection. A close failure retains ownership, so a
+// later Close can retry and callers cannot mistake an unknown exit for success.
+// Close and connection replacement are serialized; request operations retain
+// GoSNMP's existing caller-serialization requirement.
 func (x *GoSNMP) Close() error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	return x.closeConnectionLocked()
+}
 
+func (x *GoSNMP) closeConnectionLocked() error {
 	if x.Conn == nil {
 		return nil
 	}
-
-	err := x.Conn.Close()
+	if err := x.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
 	x.Conn = nil
-	return err
+	return nil
 }
 
 // connect to address addr on the given network
@@ -316,7 +325,19 @@ func (x *GoSNMP) connect(networkSuffix string) error {
 		return err
 	}
 
-	x.Transport += networkSuffix
+	// Repeated ConnectIPv4/6 after a retained close failure must not turn
+	// tcp4/udp4 into tcp44/udp44. Preserve an explicitly selected family when
+	// plain Connect is used; change it only for an explicit family request.
+	if networkSuffix != "" {
+		switch x.Transport {
+		case "udp4", "udp6":
+			x.Transport = udp + networkSuffix
+		case "tcp4", "tcp6":
+			x.Transport = tcp + networkSuffix
+		default:
+			x.Transport += networkSuffix
+		}
+	}
 	if err = x.netConnect(); err != nil {
 		return fmt.Errorf("error establishing connection to host: %w", err)
 	}
@@ -343,6 +364,13 @@ func (x *GoSNMP) connect(networkSuffix string) error {
 // Performs the real socket opening network operation. This can be used to do a
 // reconnect (needed for TCP)
 func (x *GoSNMP) netConnect() error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	// EOF is only a read result, never proof that the old socket exited.
+	// Never replace a retained connection until actual Close succeeds.
+	if err := x.closeConnectionLocked(); err != nil {
+		return fmt.Errorf("previous connection close failed: %w", err)
+	}
 	var err error
 	var localAddr net.Addr
 	addr := net.JoinHostPort(x.Target, strconv.Itoa(int(x.Port)))
@@ -356,12 +384,21 @@ func (x *GoSNMP) netConnect() error {
 			x.Transport = "udp4"
 		}
 		if x.UseUnconnectedUDPSocket {
-			x.uaddr, err = net.ResolveUDPAddr(x.Transport, addr)
+			remoteAddr, resolveErr := net.ResolveUDPAddr(x.Transport, addr)
+			err = resolveErr
 			if err != nil {
 				return err
 			}
-			x.Conn, err = net.ListenUDP(x.Transport, localAddr.(*net.UDPAddr))
-			return err
+			conn, listenErr := net.ListenUDP(x.Transport, localAddr.(*net.UDPAddr))
+			// Even an unusual non-nil connection accompanying an error remains
+			// owned and reachable by Close; no handle is discarded.
+			if conn != nil {
+				x.Conn = conn
+			}
+			if listenErr == nil {
+				x.uaddr = remoteAddr
+			}
+			return listenErr
 		}
 	case "tcp", "tcp4", "tcp6":
 		if localAddr, err = net.ResolveTCPAddr(x.Transport, x.LocalAddr); err != nil {
@@ -372,7 +409,10 @@ func (x *GoSNMP) netConnect() error {
 		}
 	}
 	dialer := net.Dialer{Timeout: x.Timeout, LocalAddr: localAddr, Control: x.Control}
-	x.Conn, err = dialer.DialContext(x.Context, x.Transport, addr)
+	conn, err := dialer.DialContext(x.Context, x.Transport, addr)
+	if conn != nil {
+		x.Conn = conn
+	}
 	return err
 }
 

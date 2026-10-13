@@ -1,0 +1,26 @@
+GoSNMP retained connection ownership source contract 1
+
+This independent source copy derives from actual upstream v1.43.2 module
+cache provenance recorded in oneops-source-provenance.json. The upstream license is preserved. This candidate has passed the default
+unit suite (10 top-level tests), the same race suite, and go vet under
+Go 1.26.0 with GOWORK=off. Tagged end-to-end and trap suites were not run.
+Formal runtime integration and immutable publication verification remain
+separate acceptance requirements. No release checksum has been invented.
+
+Close errors retain Conn. Internal TCP EOF reconnect and repeated Connect
+serialize replacement with Close, first actually closing the previous owned
+connection. An EOF is not an exit proof. Failed Close prevents dialing a new
+socket, so retry cannot erase a resource obligation. Any unusual non-nil
+connection accompanying dial/listen error remains reachable by Close.
+Only successful Close or the transport's net.ErrClosed releases ownership.
+
+The GoSNMP public Conn and request methods retain upstream caller-serialization
+requirements. Agent/Telegraf connection-owner locks serialize queries, session
+reconnect and shutdown; this change does not claim general request-thread safety.
+DialContext still uses the actual session context and original Timeout. Local
+ResolveUDPAddr/ResolveTCPAddr/ListenUDP and higher-level MIB/plugin Init have
+no new hard deadline contract. No goroutine timeout abandons those operations.
+
+All four connection-ownership negative tests passed in the default and race
+suites. Evidence: output/monitoring-push-optimization/20261011/
+gosnmp-dependency-r59/results.json in the integration workspace.

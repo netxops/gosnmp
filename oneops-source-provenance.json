@@ -1,0 +1,10 @@
+{
+  "module": "github.com/gosnmp/gosnmp",
+  "base_version": "v1.43.2",
+  "source": "go-module-cache-copy",
+  "publication_state": "validated-candidate-awaiting-immutable-publication",
+  "v1.43.2.info": "{\"Version\":\"v1.43.2\",\"Time\":\"2026-01-12T10:15:32Z\",\"Origin\":{\"VCS\":\"git\",\"URL\":\"https://github.com/gosnmp/gosnmp\",\"Hash\":\"305e6d54447485763c9fccf6ae61b02deec001cc\",\"Ref\":\"refs/tags/v1.43.2\"}}",
+  "v1.43.2.ziphash": "h1:F9loz6uMCNtIQj0RNO5wz/mZ+FZt2WyNKJYOvw+Zosw=",
+  "candidate_version": "v1.43.2-oneops.1-rc.1",
+  "replacement_module": "github.com/netxops/gosnmp"
+}
